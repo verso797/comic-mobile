@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0c0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Strip">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<title>Strip — CBZ Reader</title>
+<script src="vendor/jszip.min.js"></script>
+<style>
+  :root{
+    --ink:#0b0c0f;
+    --ink-2:#131519;
+    --paper:#e9e6dd;
+    --paper-dim:#8b8d92;
+    --glow:#7fd8e8;
+    --glow-dim:#3a5a60;
+    --warn:#e8a85c;
+    --line:#22252b;
+    --radius:2px;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--ink);
+    color:var(--paper);
+    font-family:'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+    overflow:hidden;
+  }
+  #app{ position:relative; width:100vw; height:100vh; }
+
+  /* ---------- Drop zone / empty state ---------- */
+  #dropzone{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:22px;
+    background:
+      radial-gradient(circle at 50% 40%, rgba(127,216,232,0.05), transparent 60%),
+      repeating-linear-gradient(180deg, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px, transparent 1px, transparent 3px),
+      var(--ink);
+    cursor:pointer;
+    transition:background .2s ease;
+    z-index:5;
+  }
+  #dropzone.drag{ background: radial-gradient(circle at 50% 40%, rgba(127,216,232,0.12), transparent 60%), var(--ink-2); }
+  #dropzone.hidden{ display:none; }
+  .mark{
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style:italic;
+    font-size:15vw;
+    line-height:1;
+    color:transparent;
+    -webkit-text-stroke:1px var(--paper-dim);
+    letter-spacing:-0.02em;
+    user-select:none;
+    max-width:90vw;
+  }
+  .dz-title{ font-size:13px; letter-spacing:0.22em; text-transform:uppercase; color:var(--paper); }
+  .dz-sub{ font-size:12.5px; color:var(--paper-dim); text-align:center; max-width:360px; line-height:1.6; }
+  .dz-sub kbd{ background:var(--ink-2); border:1px solid var(--line); padding:1px 6px; border-radius:3px; font-size:11px; }
+  #fileInput{ display:none; }
+  .browse-btn{
+    margin-top:4px; padding:9px 20px;
+    background:transparent; color:var(--glow);
+    border:1px solid var(--glow-dim); border-radius:2px;
+    font-size:12px; letter-spacing:0.1em; text-transform:uppercase;
+    cursor:pointer; transition:all .15s ease;
+  }
+  .browse-btn:hover{ background:rgba(127,216,232,0.08); border-color:var(--glow); }
+  #loadingMsg{ font-size:12px; color:var(--glow); letter-spacing:0.1em; text-transform:uppercase; }
+
+  /* ---------- Library ---------- */
+  #dropzone.has-library{ justify-content:flex-start; padding-top:0; gap:0; }
+  #dropzone.has-library .mark{ display:none; }
+  #dropzone.has-library .dz-title,
+  #dropzone.has-library .dz-sub,
+  #dropzone.has-library .browse-btn{ display:none; }
+
+  #libToolbar{
+    display:none;
+    position:absolute; top:0; left:0; right:0;
+    align-items:center; justify-content:space-between;
+    padding:calc(16px + env(safe-area-inset-top)) calc(28px + env(safe-area-inset-right)) 16px calc(28px + env(safe-area-inset-left));
+    z-index:2;
+  }
+  #dropzone.has-library #libToolbar{ display:flex; }
+  #libFolderName{ font-size:12.5px; letter-spacing:0.06em; color:var(--paper); opacity:0.85; }
+  #libCount{ font-size:11px; color:var(--paper-dim); margin-top:2px; letter-spacing:0.04em; }
+  .lib-actions{ display:flex; gap:10px; }
+  .lib-btn{
+    padding:7px 14px; font-size:11px; letter-spacing:0.08em; text-transform:uppercase;
+    background:transparent; color:var(--paper-dim); border:1px solid var(--line); border-radius:2px;
+    cursor:pointer; transition:all .15s ease;
+  }
+  .lib-btn:hover{ color:var(--paper); border-color:var(--paper-dim); }
+  .lib-btn.accent{ color:var(--glow); border-color:var(--glow-dim); }
+  .lib-btn.accent:hover{ border-color:var(--glow); background:rgba(127,216,232,0.08); }
+
+  #libGrid{
+    display:none;
+    width:100%; max-width:1200px;
+    margin:calc(70px + env(safe-area-inset-top)) auto 0;
+    padding:0 calc(28px + env(safe-area-inset-right)) 40px calc(28px + env(safe-area-inset-left));
+    overflow-y:auto;
+    height:calc(100vh - 70px - env(safe-area-inset-top));
+    grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+    gap:22px;
+    scrollbar-width:thin;
+  }
+  #dropzone.has-library #libGrid{ display:grid; }
+
+  #libEmpty{
+    display:none;
+    flex-direction:column; align-items:center; justify-content:center;
+    gap:10px;
+    height:calc(100vh - 70px - env(safe-area-inset-top));
+    color:var(--paper-dim);
+    text-align:center;
+    padding:0 30px;
+  }
+  #dropzone.has-library.empty #libGrid{ display:none; }
+  #dropzone.has-library.empty #libEmpty{ display:flex; }
+  #libEmpty .eyebrow{ font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:var(--glow); }
+  #libEmpty p{ font-size:13px; max-width:340px; line-height:1.6; margin:0; }
+
+  .lib-card{
+    cursor:pointer;
+    display:flex; flex-direction:column;
+    animation:cardIn .25s ease both;
+    position:relative;
+  }
+  .lib-delete{
+    position:absolute; top:6px; right:6px; z-index:3;
+    width:26px; height:26px; border-radius:50%;
+    background:rgba(11,12,15,0.75); border:1px solid var(--line);
+    color:var(--paper); display:flex; align-items:center; justify-content:center;
+    font-size:14px; line-height:1;
+  }
+  @keyframes cardIn{ from{ opacity:0; transform:translateY(6px);} to{ opacity:1; transform:translateY(0);} }
+  .lib-cover{
+    position:relative;
+    aspect-ratio:2/3; width:100%;
+    background:var(--ink-2);
+    border:1px solid var(--line); border-radius:2px;
+    overflow:hidden;
+    transition:border-color .15s ease, transform .15s ease;
+  }
+  .lib-card:hover .lib-cover{ border-color:var(--glow-dim); transform:translateY(-2px); }
+  .lib-cover img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .lib-cover .ph{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family:Georgia, serif; font-style:italic; font-size:13px; color:var(--paper-dim); opacity:0.5;
+  }
+  .lib-name{
+    margin-top:8px; font-size:11.5px; color:var(--paper); line-height:1.35;
+    overflow:hidden; text-overflow:ellipsis; display:-webkit-box;
+    -webkit-line-clamp:2; -webkit-box-orient:vertical;
+  }
+  .lib-sub{ font-size:10px; color:var(--paper-dim); margin-top:2px; letter-spacing:0.03em; }
+
+  #libDropHint{
+    display:none;
+    position:absolute; inset:70px 0 0 0; z-index:1;
+    align-items:center; justify-content:center;
+    background:rgba(11,12,15,0.85);
+    font-size:13px; color:var(--glow); letter-spacing:0.08em; text-transform:uppercase;
+    pointer-events:none;
+  }
+  #dropzone.has-library.drag #libDropHint{ display:flex; }
+
+  /* ---------- Reader strip ---------- */
+  #strip{
+    position:absolute; inset:0;
+    overflow-y:scroll; overflow-x:hidden;
+    scrollbar-width:none;
+    display:none;
+  }
+  #strip::-webkit-scrollbar{ display:none; }
+  #strip.active{ display:block; }
+  #pageStack{
+    display:flex; flex-direction:column; align-items:center;
+    max-width:900px; margin:0 auto;
+    padding-bottom:40vh;
+  }
+  #pageStack img{
+    display:block; user-select:none; -webkit-user-drag:none;
+    background:var(--ink-2);
+    width:100%; height:auto;
+  }
+  #strip.zoom-height #pageStack img{ width:auto; height:100vh; max-width:none; }
+  #strip.zoom-page #pageStack img{ width:auto; height:auto; max-width:100%; max-height:100vh; object-fit:contain; }
+  .page-seam{ width:100%; height:2px; background:var(--ink); }
+
+  /* ---------- Top bar (auto-hide) ---------- */
+  #topbar{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:calc(14px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right)) 14px calc(20px + env(safe-area-inset-left));
+    background:linear-gradient(180deg, rgba(11,12,15,0.92), transparent);
+    z-index:10;
+    transition:opacity .35s ease, transform .35s ease;
+  }
+  #topbar.faded{ opacity:0; transform:translateY(-8px); pointer-events:none; }
+  #fileTitle{ font-size:12.5px; letter-spacing:0.08em; color:var(--paper); opacity:0.85; }
+  #fileMeta{ font-size:11px; color:var(--paper-dim); letter-spacing:0.06em; margin-top:2px; }
+  .top-controls{ display:flex; align-items:center; gap:10px; }
+  .icon-btn{
+    width:40px; height:40px; border-radius:2px;
+    background:rgba(255,255,255,0.03); border:1px solid var(--line);
+    color:var(--paper-dim); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition:all .15s ease;
+  }
+  .icon-btn:hover{ color:var(--paper); border-color:var(--paper-dim); }
+
+  /* ---------- Bottom transport (auto-hide) ---------- */
+  #transport{
+    position:absolute; bottom:0; left:0; right:0;
+    display:flex; align-items:center; gap:16px;
+    padding:16px calc(20px + env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
+    background:linear-gradient(0deg, rgba(11,12,15,0.94), transparent);
+    z-index:10;
+    transition:opacity .35s ease, transform .35s ease;
+  }
+  #transport.faded{ opacity:0; transform:translateY(8px); pointer-events:none; }
+
+  #playBtn{
+    width:40px; height:40px; flex:none; border-radius:50%;
+    background:var(--ink-2); border:1px solid var(--glow-dim);
+    color:var(--glow); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition:all .15s ease;
+  }
+  #playBtn:hover{ border-color:var(--glow); background:rgba(127,216,232,0.06); }
+  #playBtn.playing{ background:var(--glow); color:var(--ink); border-color:var(--glow); }
+
+  .speed-wrap{ display:flex; align-items:center; gap:10px; flex:none; }
+  .speed-label{ font-size:10.5px; letter-spacing:0.14em; text-transform:uppercase; color:var(--paper-dim); width:64px; }
+  #speedRange{
+    -webkit-appearance:none; appearance:none;
+    width:110px; height:2px; background:var(--line); outline:none; border-radius:2px;
+  }
+  #speedRange::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none;
+    width:12px; height:12px; border-radius:50%;
+    background:var(--glow); cursor:pointer; border:2px solid var(--ink);
+  }
+  #speedRange::-moz-range-thumb{
+    width:12px; height:12px; border-radius:50%;
+    background:var(--glow); cursor:pointer; border:2px solid var(--ink);
+  }
+  #speedVal{ font-size:11px; color:var(--paper-dim); width:34px; text-align:right; font-variant-numeric:tabular-nums; }
+
+  #scrubTrack{
+    flex:1; position:relative; height:2px; background:var(--line); border-radius:2px; cursor:pointer;
+  }
+  #scrubFill{ position:absolute; top:0; left:0; height:100%; background:var(--glow); border-radius:2px; }
+  #scrubHead{
+    position:absolute; top:50%; width:10px; height:10px; border-radius:50%;
+    background:var(--glow); transform:translate(-50%,-50%);
+  }
+  #pctLabel{ font-size:11px; color:var(--paper-dim); width:38px; text-align:right; font-variant-numeric:tabular-nums; flex:none; }
+
+  /* ---------- Right-edge sprocket rail (signature element) ---------- */
+  #rail{
+    position:absolute; top:0; right:0; bottom:0; width:22px;
+    z-index:9;
+    display:flex; flex-direction:column; align-items:center;
+    padding:10px 0;
+    pointer-events:none;
+  }
+  .sprocket{
+    width:4px; height:4px; border-radius:50%;
+    background:var(--line);
+    margin-bottom:calc((100vh - 20px)/38 - 4px);
+    transition:background .2s ease;
+  }
+  .sprocket:last-child{ margin-bottom:0; }
+  .sprocket.lit{ background:var(--glow); box-shadow:0 0 6px var(--glow); }
+
+  /* ---------- Toast (resume prompt) ---------- */
+  #toast{
+    position:absolute; bottom:86px; left:50%; transform:translateX(-50%) translateY(6px);
+    background:var(--ink-2); border:1px solid var(--line); border-radius:3px;
+    padding:9px 16px; font-size:12px; color:var(--paper-dim);
+    letter-spacing:0.03em; opacity:0; pointer-events:none;
+    transition:opacity .25s ease, transform .25s ease;
+    z-index:12;
+  }
+  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  #toast b{ color:var(--glow); font-weight:600; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="dropzone">
+    <div id="libToolbar">
+      <div>
+        <div id="libFolderName">My Library</div>
+        <div id="libCount"></div>
+      </div>
+      <div class="lib-actions">
+        <button class="lib-btn accent" id="libOpenFileBtn">Import…</button>
+      </div>
+    </div>
+    <div id="libDropHint">Drop to open</div>
+    <div class="mark">Strip</div>
+    <div class="dz-title">Comic Book Archive Reader</div>
+    <div class="dz-sub" id="dzSub">Import a .cbz file to get started. Everything stays on your device — nothing is uploaded anywhere.</div>
+    <button class="browse-btn" id="browseBtn">Import a .cbz file</button>
+    <div id="libGrid"></div>
+    <div id="libEmpty">
+      <div class="eyebrow">Empty shelf</div>
+      <p>No comics yet. Tap "Import a .cbz file" to add some — they'll be saved on this device so they're here next time you open the app.</p>
+    </div>
+    <input type="file" id="fileInput" accept=".cbz,.zip,application/zip" multiple>
+  </div>
+
+  <div id="strip">
+    <div id="pageStack"></div>
+  </div>
+
+  <div id="rail"></div>
+
+  <div id="topbar" class="faded">
+    <div>
+      <div id="fileTitle">—</div>
+      <div id="fileMeta"></div>
+    </div>
+    <div class="top-controls">
+      <div class="icon-btn" id="fitBtn" title="Cycle zoom: fit width / fit height / fit page">⤢</div>
+      <div class="icon-btn" id="closeBtn" title="Close this archive">✕</div>
+    </div>
+  </div>
+
+  <div id="transport" class="faded">
+    <div id="playBtn" title="Play / pause autoscroll (Space)">
+      <svg id="playIcon" width="14" height="14" viewBox="0 0 14 14"><polygon points="2,1 13,7 2,13" fill="currentColor"/></svg>
+      <svg id="pauseIcon" width="14" height="14" viewBox="0 0 14 14" style="display:none"><rect x="2" y="1" width="3.4" height="12" fill="currentColor"/><rect x="8.6" y="1" width="3.4" height="12" fill="currentColor"/></svg>
+    </div>
+    <div class="speed-wrap">
+      <div class="speed-label">Speed</div>
+      <input type="range" id="speedRange" min="8" max="160" value="42" step="1">
+      <div id="speedVal">42</div>
+    </div>
+    <div id="scrubTrack">
+      <div id="scrubFill"></div>
+      <div id="scrubHead"></div>
+    </div>
+    <div id="pctLabel">0%</div>
+  </div>
+
+  <div id="toast"></div>
+
+</div>
+
+<script>
+(() => {
+  const dropzone   = document.getElementById('dropzone');
+  const dzSub      = document.getElementById('dzSub');
+  const fileInput  = document.getElementById('fileInput');
+  const browseBtn  = document.getElementById('browseBtn');
+  const strip      = document.getElementById('strip');
+  const pageStack  = document.getElementById('pageStack');
+  const topbar     = document.getElementById('topbar');
+  const transport  = document.getElementById('transport');
+  const fileTitle  = document.getElementById('fileTitle');
+  const fileMeta   = document.getElementById('fileMeta');
+  const closeBtn   = document.getElementById('closeBtn');
+  const playBtn    = document.getElementById('playBtn');
+  const playIcon   = document.getElementById('playIcon');
+  const pauseIcon  = document.getElementById('pauseIcon');
+  const speedRange = document.getElementById('speedRange');
+  const speedVal   = document.getElementById('speedVal');
+  const scrubTrack = document.getElementById('scrubTrack');
+  const scrubFill  = document.getElementById('scrubFill');
+  const scrubHead  = document.getElementById('scrubHead');
+  const pctLabel   = document.getElementById('pctLabel');
+  const rail       = document.getElementById('rail');
+  const toast      = document.getElementById('toast');
+  const fitBtn     = document.getElementById('fitBtn');
+  const libToolbar   = document.getElementById('libToolbar');
+  const libFolderName= document.getElementById('libFolderName');
+  const libCount      = document.getElementById('libCount');
+  const libOpenFileBtn= document.getElementById('libOpenFileBtn');
+  const libGrid        = document.getElementById('libGrid');
+  const libEmpty        = document.getElementById('libEmpty');
+
+  let objectUrls = [];
+  let playing = false;
+  let speed = 42; // px/sec
+  let rafId = null;
+  let lastTs = null;
+  let idleTimer = null;
+  let chromeVisible = true;
+  let userScrollLock = false;   // true right after a manual scroll interrupts autoscroll
+  let programmaticScroll = false;
+  let scrollPos = 0; // float accumulator — strip.scrollTop rounds to whole pixels,
+                      // so low speeds (<1px/frame) need precision tracked outside the DOM
+  let zoomMode = 'width'; // 'width' | 'height' | 'page'
+  let currentComicId = null;
+
+  // ---------- sprocket rail ----------
+  const SPROCKET_COUNT = 38;
+  for (let i = 0; i < SPROCKET_COUNT; i++) {
+    const d = document.createElement('div');
+    d.className = 'sprocket';
+    rail.appendChild(d);
+  }
+  const sprockets = [...rail.querySelectorAll('.sprocket')];
+
+  function updateRail(pct) {
+    const lit = Math.round(pct * (SPROCKET_COUNT - 1));
+    sprockets.forEach((s, i) => s.classList.toggle('lit', i <= lit));
+  }
+
+  // ---------- natural filename sort ----------
+  function naturalCompare(a, b) {
+    const ax = [], bx = [];
+    a.replace(/(\d+)|(\D+)/g, (_, d, s) => ax.push([d ? parseInt(d, 10) : Infinity, s || '']));
+    b.replace(/(\d+)|(\D+)/g, (_, d, s) => bx.push([d ? parseInt(d, 10) : Infinity, s || '']));
+    while (ax.length && bx.length) {
+      const an = ax.shift(), bn = bx.shift();
+      const nn = (an[0] - bn[0]) || an[1].localeCompare(bn[1]);
+      if (nn) return nn;
+    }
+    return ax.length - bx.length;
+  }
+
+  const IMG_RE = /\.(jpe?g|png|gif|webp|bmp)$/i;
+
+  // ---------- zoom ----------
+  const ZOOM_CYCLE = ['width', 'height', 'page'];
+  const ZOOM_LABEL = { width: 'W', height: 'H', page: 'P' };
+  function applyZoomMode() {
+    strip.classList.remove('zoom-width', 'zoom-height', 'zoom-page');
+    strip.classList.add('zoom-' + zoomMode);
+    fitBtn.textContent = ZOOM_LABEL[zoomMode];
+    fitBtn.classList.toggle('on', zoomMode !== 'width');
+  }
+  fitBtn.addEventListener('click', () => {
+    const i = ZOOM_CYCLE.indexOf(zoomMode);
+    zoomMode = ZOOM_CYCLE[(i + 1) % ZOOM_CYCLE.length];
+    applyZoomMode();
+    try { localStorage.setItem('strip:zoomMode', zoomMode); } catch {}
+  });
+  try {
+    const savedZoom = localStorage.getItem('strip:zoomMode');
+    if (savedZoom) zoomMode = savedZoom;
+  } catch {}
+  applyZoomMode();
+
+  // ---------- loading ----------
+  // `source` may be a browser File (picker/drop) or a raw ArrayBuffer (handed off
+  // from the Electron main process when the app is opened via double-click).
+  async function loadFile(source, displayName, comicId) {
+    if (!source) return;
+    resetReader();
+    currentComicId = comicId || null;
+    dzSub.textContent = 'Reading archive…';
+    const name = displayName || source.name || 'archive';
+    try {
+      const zip = await JSZip.loadAsync(source);
+      const entries = Object.values(zip.files)
+        .filter(f => !f.dir && IMG_RE.test(f.name))
+        .sort((a, b) => naturalCompare(a.name, b.name));
+
+      if (entries.length === 0) {
+        dzSub.textContent = 'No images found in that archive. Try a different .cbz file.';
+        return;
+      }
+
+      dzSub.textContent = `Unpacking ${entries.length} pages…`;
+
+      const frag = document.createDocumentFragment();
+      let done = 0;
+      for (const entry of entries) {
+        const blob = await entry.async('blob');
+        const url = URL.createObjectURL(blob);
+        objectUrls.push(url);
+        const img = document.createElement('img');
+        img.src = url;
+        img.loading = 'lazy';
+        img.draggable = false;
+        img.alt = entry.name;
+        frag.appendChild(img);
+        done++;
+        if (done % 8 === 0) dzSub.textContent = `Unpacking ${done}/${entries.length} pages…`;
+      }
+      pageStack.appendChild(frag);
+
+      fileTitle.textContent = name.replace(/\.(cbz|zip)$/i, '');
+      fileMeta.textContent = `${entries.length} pages`;
+
+      dropzone.classList.add('hidden');
+      strip.classList.add('active');
+      showChrome();
+      scheduleHide();
+    } catch (err) {
+      console.error(err);
+      dzSub.textContent = 'Could not open that file — is it a valid .cbz / .zip archive?';
+    }
+  }
+
+  function resetReader() {
+    pauseScroll();
+    saveProgressNow();
+    currentComicId = null;
+    objectUrls.forEach(u => URL.revokeObjectURL(u));
+    objectUrls = [];
+    pageStack.innerHTML = '';
+    strip.scrollTop = 0;
+  }
+
+  // ---------- IndexedDB library ----------
+  const DB_NAME = 'strip-library';
+  let dbPromise = null;
+  function openDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains('comics')) {
+          req.result.createObjectStore('comics', { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+  async function dbAll() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = db.transaction('comics', 'readonly').objectStore('comics').getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function dbPut(record) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('comics', 'readwrite');
+      tx.objectStore('comics').put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function dbGet(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = db.transaction('comics', 'readonly').objectStore('comics').get(id);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function dbDelete(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('comics', 'readwrite');
+      tx.objectStore('comics').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+  function formatSize(bytes) {
+    if (bytes > 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+    return Math.round(bytes / 1e3) + ' KB';
+  }
+
+  async function renderLibrary() {
+    const items = await dbAll();
+    items.sort((a, b) => b.addedAt - a.addedAt);
+    dropzone.classList.add('has-library');
+    dropzone.classList.toggle('empty', items.length === 0);
+    libCount.textContent = items.length + (items.length === 1 ? ' comic' : ' comics');
+
+    libGrid.innerHTML = '';
+    items.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'lib-card';
+      card.innerHTML = `
+        <div class="lib-delete" title="Remove">✕</div>
+        <div class="lib-cover">${item.thumb ? `<img src="${item.thumb}" loading="lazy">` : `<div class="ph">CBZ</div>`}</div>
+        <div class="lib-name"></div>
+        <div class="lib-sub"></div>
+      `;
+      card.querySelector('.lib-name').textContent = item.name.replace(/\.(cbz|zip)$/i, '');
+      card.querySelector('.lib-sub').textContent = formatSize(item.size) + (item.progress ? ` · ${Math.round(item.progress * 100)}%` : '');
+      card.addEventListener('click', e => {
+        if (e.target.closest('.lib-delete')) return;
+        openComic(item);
+      });
+      card.querySelector('.lib-delete').addEventListener('click', async e => {
+        e.stopPropagation();
+        if (confirm(`Remove "${item.name}" from your library? This can't be undone.`)) {
+          await dbDelete(item.id);
+          renderLibrary();
+        }
+      });
+      libGrid.appendChild(card);
+    });
+  }
+
+  async function openComic(item) {
+    await loadFile(item.blob, item.name, item.id);
+    if (item.progress) {
+      requestAnimationFrame(() => {
+        const maxScroll = strip.scrollHeight - strip.clientHeight;
+        strip.scrollTop = item.progress * maxScroll;
+        scrollPos = strip.scrollTop;
+        refreshProgress();
+      });
+    }
+  }
+
+  let saveProgressTimer = null;
+  function scheduleSaveProgress() {
+    if (!currentComicId) return;
+    clearTimeout(saveProgressTimer);
+    saveProgressTimer = setTimeout(saveProgressNow, 800);
+  }
+  async function saveProgressNow() {
+    if (!currentComicId) return;
+    const maxScroll = strip.scrollHeight - strip.clientHeight;
+    const pct = maxScroll > 0 ? Math.min(1, Math.max(0, strip.scrollTop / maxScroll)) : 0;
+    try {
+      const rec = await dbGet(currentComicId);
+      if (rec) { rec.progress = pct; await dbPut(rec); }
+    } catch (err) { console.error('Failed to save progress', err); }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveProgressNow();
+  });
+
+  async function importFiles(fileList) {
+    const files = Array.from(fileList || []).filter(f => /\.(cbz|zip)$/i.test(f.name));
+    if (!files.length) return;
+    dzSub.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}…`;
+    let lastAdded = null;
+    for (const file of files) {
+      try {
+        const id = (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+        const record = { id, name: file.name, size: file.size, addedAt: Date.now(), blob: file, thumb: null, progress: 0 };
+        try {
+          const zip = await JSZip.loadAsync(file);
+          const entries = Object.values(zip.files)
+            .filter(f => !f.dir && IMG_RE.test(f.name))
+            .sort((a, b) => naturalCompare(a.name, b.name));
+          if (entries.length) {
+            const blob = await entries[0].async('blob');
+            record.thumb = await blobToDataURL(blob);
+          }
+        } catch (err) { console.error('Thumbnail generation failed', err); }
+        await dbPut(record);
+        lastAdded = record;
+      } catch (err) { console.error('Import failed for', file.name, err); }
+    }
+    await renderLibrary();
+    if (files.length === 1 && lastAdded) {
+      openComic(lastAdded);
+    } else {
+      dzSub.textContent = 'Import a .cbz file to get started. Everything stays on your device — nothing is uploaded anywhere.';
+    }
+  }
+  renderLibrary();
+
+  // ---------- open / close ----------
+  browseBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => { importFiles(e.target.files); fileInput.value = ''; });
+
+  ['dragenter', 'dragover'].forEach(ev =>
+    dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+  dropzone.addEventListener('drop', e => importFiles(e.dataTransfer.files));
+  dropzone.addEventListener('click', e => {
+    if (dropzone.classList.contains('has-library')) return;
+    if (e.target === browseBtn) return;
+    fileInput.click();
+  });
+  libOpenFileBtn.addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+
+  closeBtn.addEventListener('click', () => {
+    resetReader();
+    strip.classList.remove('active');
+    dropzone.classList.remove('hidden');
+    dzSub.textContent = 'Import a .cbz file to get started. Everything stays on your device — nothing is uploaded anywhere.';
+    fileInput.value = '';
+    renderLibrary();
+  });
+
+  // ---------- autoscroll ----------
+  function step(ts) {
+    if (!playing) return;
+    if (lastTs === null) lastTs = ts;
+    const dt = (ts - lastTs) / 1000;
+    lastTs = ts;
+
+    const maxScroll = strip.scrollHeight - strip.clientHeight;
+    if (scrollPos >= maxScroll - 1) {
+      pauseScroll();
+      return;
+    }
+    scrollPos += speed * dt;
+    programmaticScroll = true;
+    strip.scrollTop = scrollPos;
+    rafId = requestAnimationFrame(step);
+  }
+
+  function playScroll() {
+    if (playing) return;
+    playing = true;
+    lastTs = null;
+    scrollPos = strip.scrollTop; // resync in case of a manual scroll/seek since last play
+    playBtn.classList.add('playing');
+    playIcon.style.display = 'none';
+    pauseIcon.style.display = '';
+    hideToast();
+    rafId = requestAnimationFrame(step);
+  }
+
+  function pauseScroll() {
+    playing = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    playBtn.classList.remove('playing');
+    playIcon.style.display = '';
+    pauseIcon.style.display = 'none';
+  }
+
+  playBtn.addEventListener('click', () => playing ? pauseScroll() : playScroll());
+
+  // interrupt autoscroll on manual input, offer resume
+  function interrupt() {
+    if (programmaticScroll) { programmaticScroll = false; return; }
+    if (playing) {
+      pauseScroll();
+      showToast();
+    }
+  }
+  strip.addEventListener('wheel', interrupt, { passive: true });
+  strip.addEventListener('touchstart', interrupt, { passive: true });
+  strip.addEventListener('mousedown', interrupt);
+
+  function showToast() {
+    toast.innerHTML = 'Autoscroll paused — <b>press Space</b> to resume';
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(hideToast, 3200);
+  }
+  function hideToast() { toast.classList.remove('show'); }
+
+  // ---------- speed control ----------
+  speedRange.addEventListener('input', () => {
+    speed = parseInt(speedRange.value, 10);
+    speedVal.textContent = speed;
+  });
+
+  // ---------- scrub / progress ----------
+  function refreshProgress() {
+    const maxScroll = strip.scrollHeight - strip.clientHeight;
+    const pct = maxScroll > 0 ? Math.min(1, Math.max(0, strip.scrollTop / maxScroll)) : 0;
+    scrubFill.style.width = (pct * 100) + '%';
+    scrubHead.style.left = (pct * 100) + '%';
+    pctLabel.textContent = Math.round(pct * 100) + '%';
+    updateRail(pct);
+    scheduleSaveProgress();
+  }
+  strip.addEventListener('scroll', refreshProgress);
+
+  function seekFromEvent(e) {
+    const rect = scrubTrack.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    const pct = Math.min(1, Math.max(0, x / rect.width));
+    const maxScroll = strip.scrollHeight - strip.clientHeight;
+    strip.scrollTop = pct * maxScroll;
+  }
+  let scrubbing = false;
+  scrubTrack.addEventListener('mousedown', e => { scrubbing = true; pauseScroll(); seekFromEvent(e); });
+  window.addEventListener('mousemove', e => { if (scrubbing) seekFromEvent(e); });
+  window.addEventListener('mouseup', () => scrubbing = false);
+  scrubTrack.addEventListener('touchstart', e => { pauseScroll(); seekFromEvent(e); }, { passive: true });
+  scrubTrack.addEventListener('touchmove', seekFromEvent, { passive: true });
+
+  // ---------- chrome auto-hide ----------
+  function showChrome() {
+    chromeVisible = true;
+    topbar.classList.remove('faded');
+    transport.classList.remove('faded');
+  }
+  function hideChrome() {
+    if (scrubbing) return;
+    chromeVisible = false;
+    topbar.classList.add('faded');
+    transport.classList.add('faded');
+  }
+  function scheduleHide() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(hideChrome, 2600);
+  }
+  ['mousemove', 'touchstart', 'click'].forEach(ev =>
+    document.getElementById('app').addEventListener(ev, () => {
+      if (!strip.classList.contains('active')) return;
+      showChrome();
+      scheduleHide();
+    }));
+
+  // ---------- keyboard ----------
+  window.addEventListener('keydown', e => {
+    if (!strip.classList.contains('active')) return;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      playing ? pauseScroll() : playScroll();
+      showChrome(); scheduleHide();
+    } else if (e.code === 'ArrowUp') {
+      e.preventDefault();
+      speed = Math.min(160, speed + 6);
+      speedRange.value = speed; speedVal.textContent = speed;
+    } else if (e.code === 'ArrowDown') {
+      e.preventDefault();
+      speed = Math.max(8, speed - 6);
+      speedRange.value = speed; speedVal.textContent = speed;
+    } else if (e.code === 'Escape') {
+      closeBtn.click();
+    }
+  });
+
+  window.addEventListener('resize', refreshProgress);
+
+  // ---------- register service worker for offline support ----------
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(err => console.error('SW registration failed', err));
+    });
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,25 +1,30 @@
 # Strip — PWA (iPhone) build
 
-A phone-friendly version of Strip: continuous-scroll CBZ reading, smooth
-autoscroll, tap-to-cycle zoom (fit width / fit height / fit page), and an
-on-device library with cover thumbnails and reading-progress memory.
+A phone-friendly version of Strip: continuous-scroll reading of `.cbz`,
+`.cbr`, and `.pdf` files, smooth autoscroll, tap-to-cycle zoom (fit width /
+fit height / fit page), and an on-device library with cover thumbnails and
+reading-progress memory.
 
 ## What's different from the desktop app
 
 - **No text-to-speech / OCR** (as requested).
-- **No `.cbr` support.** RAR extraction on desktop uses a native Node
-  package; there's no equivalent that runs safely in a browser/PWA context
-  without a much bigger dependency, so this build only reads `.cbz`/`.zip`.
-- **No PDF support** in this build (kept out of scope to keep this a focused,
-  well-tested first version).
+- **`.cbr` support works differently under the hood.** Desktop uses a
+  native Node package for RAR extraction; this build uses a WASM build of
+  the same underlying unrar engine that runs directly in Safari — same
+  format support, just a different (browser-compatible) path to get there.
+- **`.pdf` support renders pages to images on-device** using PDF.js. This
+  is noticeably slower to open than `.cbz`/`.cbr` — every page gets
+  rasterized at 2x scale the first time you open it, which takes real
+  work on a phone CPU/GPU, especially for long PDFs. `.cbz`/`.cbr` just
+  unpack pre-made images, so they open much faster.
 - **Library works differently.** The desktop app watches a folder on your
   computer. iOS doesn't allow apps to do that, so this version works by
-  *importing* files instead — pick one or more `.cbz` files (from the Files
-  app, iCloud Drive, AirDrop, etc.) and they're copied into the app's private
-  on-device storage (IndexedDB) so they're there every time you open it, no
-  internet required after that.
-- Ctrl+scroll zoom (desktop) is replaced by the same tap-to-cycle zoom button,
-  plus your phone's native pinch-to-zoom still works everywhere.
+  *importing* files instead — pick one or more files (from the Files app,
+  iCloud Drive, AirDrop, etc.) and they're copied into the app's private
+  on-device storage (IndexedDB) so they're there every time you open it,
+  no internet required after that.
+- Ctrl+scroll zoom (desktop) is replaced by the same tap-to-cycle zoom
+  button, plus your phone's native pinch-to-zoom still works everywhere.
 
 ## Hosting it (needed once, so Safari has a URL to install from)
 
@@ -49,10 +54,15 @@ before:
   storage. It's not common, but unlike a native app it's not guaranteed
   never to happen — don't rely on this as your only copy of anything
   irreplaceable.
+- Long PDFs will take a while to import (see above) — this is inherent to
+  rendering pages on-device, not a bug.
 - This was built and tested in a Chromium-based environment (no Mac/iPhone
-  available on my end). The core logic — import, zip parsing, IndexedDB
-  library, zoom, autoscroll, progress save/restore — was verified working
-  end-to-end. iOS Safari-specific quirks (exact install prompt behavior,
-  any WebKit rendering differences) haven't been tested on a real device.
-  If something looks off specifically on your phone, tell me what you're
-  seeing and I'll fix it.
+  available on my end). The core logic — import, `.cbz`/`.cbr`/`.pdf`
+  extraction, IndexedDB library, zoom, autoscroll, progress save/restore —
+  was verified working end-to-end against real test files of each format,
+  including a real `.cbr` built with the actual `rar` CLI. iOS
+  Safari-specific quirks (exact install prompt behavior, any WebKit
+  rendering or performance differences) haven't been tested on a real
+  device. If something looks off specifically on your phone, tell me what
+  you're seeing and I'll fix it.
+

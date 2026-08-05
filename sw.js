@@ -1,11 +1,15 @@
 // Bump this when shipping any change to a cached file — old caches are cleaned up on activate.
-const CACHE_NAME = 'strip-shell-v1';
+const CACHE_NAME = 'strip-shell-v2';
 
 const SHELL_FILES = [
   './',
   './index.html',
   './manifest.webmanifest',
   './vendor/jszip.min.js',
+  './vendor/unrar/unrar.js',
+  './vendor/unrar/unrar.wasm',
+  './vendor/pdfjs/pdf.min.mjs',
+  './vendor/pdfjs/pdf.worker.min.mjs',
   './icons/icon-180.png',
   './icons/icon-192.png',
   './icons/icon-512.png',

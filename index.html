@@ -13,6 +13,13 @@
 <link rel="icon" href="icons/icon-192.png">
 <title>Strip — CBZ Reader</title>
 <script src="vendor/jszip.min.js"></script>
+<script src="vendor/unrar/unrar.js"></script>
+<script type="module">
+  import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.mjs';
+  window.pdfjsLib = pdfjsLib;
+  window.dispatchEvent(new Event('pdfjs-ready'));
+</script>
 <style>
   :root{
     --ink:#0b0c0f;
@@ -311,14 +318,14 @@
     <div id="libDropHint">Drop to open</div>
     <div class="mark">Strip</div>
     <div class="dz-title">Comic Book Archive Reader</div>
-    <div class="dz-sub" id="dzSub">Import a .cbz file to get started. Everything stays on your device — nothing is uploaded anywhere.</div>
-    <button class="browse-btn" id="browseBtn">Import a .cbz file</button>
+    <div class="dz-sub" id="dzSub">Import a .cbz, .cbr, or .pdf to get started. Everything stays on your device — nothing is uploaded anywhere.</div>
+    <button class="browse-btn" id="browseBtn">Import a comic</button>
     <div id="libGrid"></div>
     <div id="libEmpty">
       <div class="eyebrow">Empty shelf</div>
-      <p>No comics yet. Tap "Import a .cbz file" to add some — they'll be saved on this device so they're here next time you open the app.</p>
+      <p>No comics yet. Tap "Import a comic" to add some — they'll be saved on this device so they're here next time you open the app.</p>
     </div>
-    <input type="file" id="fileInput" accept=".cbz,.zip,application/zip" multiple>
+    <input type="file" id="fileInput" accept=".cbz,.zip,.cbr,.pdf,application/zip,application/pdf" multiple>
   </div>
 
   <div id="strip">
@@ -458,44 +465,104 @@
   // ---------- loading ----------
   // `source` may be a browser File (picker/drop) or a raw ArrayBuffer (handed off
   // from the Electron main process when the app is opened via double-click).
+  function detectKind(name) {
+    if (/\.pdf$/i.test(name)) return 'pdf';
+    if (/\.cbr$/i.test(name)) return 'cbr';
+    return 'zip';
+  }
+
+  function waitForPdfjs() {
+    if (window.pdfjsLib) return Promise.resolve();
+    return new Promise(resolve => window.addEventListener('pdfjs-ready', resolve, { once: true }));
+  }
+
+  async function extractZipPages(source, opts) {
+    const zip = await JSZip.loadAsync(source);
+    let entries = Object.values(zip.files)
+      .filter(f => !f.dir && IMG_RE.test(f.name))
+      .sort((a, b) => naturalCompare(a.name, b.name));
+    if (opts && opts.firstOnly) entries = entries.slice(0, 1);
+    const pages = [];
+    for (const entry of entries) pages.push({ blob: await entry.async('blob'), name: entry.name });
+    return pages;
+  }
+
+  async function extractCbrPages(source, opts) {
+    const data = source instanceof ArrayBuffer ? source : await source.arrayBuffer();
+    const wasmBinary = await (await fetch('vendor/unrar/unrar.wasm')).arrayBuffer();
+    const extractor = await UnrarJS.createExtractorFromData({ wasmBinary, data });
+    const names = [...extractor.getFileList().fileHeaders]
+      .filter(h => !h.flags.directory && IMG_RE.test(h.name))
+      .map(h => h.name)
+      .sort(naturalCompare);
+    const wanted = (opts && opts.firstOnly) ? names.slice(0, 1) : names;
+    if (wanted.length === 0) return [];
+    const files = [...extractor.extract({ files: wanted }).files]
+      .filter(f => f.fileHeader && wanted.includes(f.fileHeader.name))
+      .sort((a, b) => naturalCompare(a.fileHeader.name, b.fileHeader.name));
+    return files.map(f => ({ blob: new Blob([f.extraction]), name: f.fileHeader.name }));
+  }
+
+  async function extractPdfPages(source, opts) {
+    await waitForPdfjs();
+    const data = source instanceof ArrayBuffer ? source : await source.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data }).promise;
+    const count = (opts && opts.firstOnly) ? Math.min(1, pdf.numPages) : pdf.numPages;
+    const pages = [];
+    for (let i = 1; i <= count; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      pages.push({ blob, name: `page-${String(i).padStart(3, '0')}.png` });
+    }
+    return pages;
+  }
+
+  async function extractPages(source, name, opts) {
+    const kind = detectKind(name);
+    if (kind === 'pdf') return extractPdfPages(source, opts);
+    if (kind === 'cbr') return extractCbrPages(source, opts);
+    return extractZipPages(source, opts);
+  }
+
   async function loadFile(source, displayName, comicId) {
     if (!source) return;
     resetReader();
     currentComicId = comicId || null;
-    dzSub.textContent = 'Reading archive…';
+    dzSub.textContent = 'Reading file…';
     const name = displayName || source.name || 'archive';
     try {
-      const zip = await JSZip.loadAsync(source);
-      const entries = Object.values(zip.files)
-        .filter(f => !f.dir && IMG_RE.test(f.name))
-        .sort((a, b) => naturalCompare(a.name, b.name));
+      const pages = await extractPages(source, name);
 
-      if (entries.length === 0) {
-        dzSub.textContent = 'No images found in that archive. Try a different .cbz file.';
+      if (pages.length === 0) {
+        dzSub.textContent = 'No readable pages found in that file.';
         return;
       }
 
-      dzSub.textContent = `Unpacking ${entries.length} pages…`;
+      dzSub.textContent = `Unpacking ${pages.length} pages…`;
 
       const frag = document.createDocumentFragment();
       let done = 0;
-      for (const entry of entries) {
-        const blob = await entry.async('blob');
-        const url = URL.createObjectURL(blob);
+      for (const p of pages) {
+        const url = URL.createObjectURL(p.blob);
         objectUrls.push(url);
         const img = document.createElement('img');
         img.src = url;
         img.loading = 'lazy';
         img.draggable = false;
-        img.alt = entry.name;
+        img.alt = p.name;
         frag.appendChild(img);
         done++;
-        if (done % 8 === 0) dzSub.textContent = `Unpacking ${done}/${entries.length} pages…`;
+        if (done % 8 === 0) dzSub.textContent = `Unpacking ${done}/${pages.length} pages…`;
       }
       pageStack.appendChild(frag);
 
-      fileTitle.textContent = name.replace(/\.(cbz|zip)$/i, '');
-      fileMeta.textContent = `${entries.length} pages`;
+      fileTitle.textContent = name.replace(/\.(cbz|zip|cbr|pdf)$/i, '');
+      fileMeta.textContent = `${pages.length} pages`;
 
       dropzone.classList.add('hidden');
       strip.classList.add('active');
@@ -503,7 +570,7 @@
       scheduleHide();
     } catch (err) {
       console.error(err);
-      dzSub.textContent = 'Could not open that file — is it a valid .cbz / .zip archive?';
+      dzSub.textContent = 'Could not open that file — is it a valid .cbz / .cbr / .pdf?';
     }
   }
 
@@ -647,7 +714,7 @@
   });
 
   async function importFiles(fileList) {
-    const files = Array.from(fileList || []).filter(f => /\.(cbz|zip)$/i.test(f.name));
+    const files = Array.from(fileList || []).filter(f => /\.(cbz|zip|cbr|pdf)$/i.test(f.name));
     if (!files.length) return;
     dzSub.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}…`;
     let lastAdded = null;
@@ -656,14 +723,8 @@
         const id = (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2));
         const record = { id, name: file.name, size: file.size, addedAt: Date.now(), blob: file, thumb: null, progress: 0 };
         try {
-          const zip = await JSZip.loadAsync(file);
-          const entries = Object.values(zip.files)
-            .filter(f => !f.dir && IMG_RE.test(f.name))
-            .sort((a, b) => naturalCompare(a.name, b.name));
-          if (entries.length) {
-            const blob = await entries[0].async('blob');
-            record.thumb = await blobToDataURL(blob);
-          }
+          const pages = await extractPages(file, file.name, { firstOnly: true });
+          if (pages.length) record.thumb = await blobToDataURL(pages[0].blob);
         } catch (err) { console.error('Thumbnail generation failed', err); }
         await dbPut(record);
         lastAdded = record;
@@ -673,7 +734,7 @@
     if (files.length === 1 && lastAdded) {
       openComic(lastAdded);
     } else {
-      dzSub.textContent = 'Import a .cbz file to get started. Everything stays on your device — nothing is uploaded anywhere.';
+      dzSub.textContent = 'Import a comic to get started. Everything stays on your device — nothing is uploaded anywhere.';
     }
   }
   renderLibrary();
@@ -698,7 +759,7 @@
     resetReader();
     strip.classList.remove('active');
     dropzone.classList.remove('hidden');
-    dzSub.textContent = 'Import a .cbz file to get started. Everything stays on your device — nothing is uploaded anywhere.';
+    dzSub.textContent = 'Import a .cbz, .cbr, or .pdf to get started. Everything stays on your device — nothing is uploaded anywhere.';
     fileInput.value = '';
     renderLibrary();
   });
